@@ -107,8 +107,62 @@ class TaxiCab(MarkovDecisionProcess[TaxiCabState, TaxiCabAction]):
         
         return TaxiCabState(taxi=taxi, waiting_passengers=passengers)
 
-    def actions(self, s): 
+    def actions(self): 
         return self.action_space
+    
+    def list_all_possible_states(self):
+        all_states = []
+        # Iterate through all possible taxi locations
+        for taxi_x in range(self.width):
+            for taxi_y in range(self.height):
+                taxi_location = Location(taxi_x, taxi_y)
+                if taxi_location not in [wall.location for wall in self.walls]:
+                    # Include states where the passenger is in the taxi
+                    for passenger_in_taxi in [True, False]:
+                        # Iterate through all possible passenger locations (only if not in the taxi)
+                        passenger_locations = self.taxi_stands if not passenger_in_taxi else [None]
+                        for passenger_location in passenger_locations:
+                            # Iterate through all possible destinations
+                            for destination_stand in self.taxi_stands:
+                                #
+ 
+                                # If passenger is in the taxi, set the current passenger location to None
+                                if passenger_in_taxi:
+                                    passenger_current_location = None
+                                    destination_stand = destination_stand.location
+                                else:
+                                    passenger_current_location = passenger_location.location
+                                    destination_stand = None
+
+                                # Construct the detailed state representation
+                                    
+                                passenger = Passenger(
+                                    location = passenger_current_location,
+                                    destination = destination_stand)
+                                if passenger_in_taxi:
+                                    taxi = Taxi(taxi_location,passenger)
+                                    state = TaxiCabState(taxi,())
+                                else: #passenger not in taxi
+                                    taxi = Taxi(taxi_location,None)
+                                    state = TaxiCabState(taxi,(passenger,))
+#                                 state = {
+#                                     'taxi_location': taxi_location,
+#                                     'passenger_in_taxi': passenger_in_taxi,
+#                                     'passenger_location': passenger_current_location,
+#                                     'destination': destination_stand.location
+#                                 }
+                                all_states.append(state)
+        #at terminal states
+        for destination_stand in self.taxi_stands:
+            taxi = Taxi(destination_stand.location, None)
+            state = TaxiCabState(taxi,())
+            all_states.append(state)
+        #remove dupicates
+        all_states = list(set(all_states))
+        return all_states
+
+
+         
     
 #     def new_passenger_at_stand(self, s: TaxiCabState, rng: random.Random = random) -> TaxiCabState:
 #         if len(s.waiting_passengers) == len(self.taxi_stands):
@@ -128,9 +182,7 @@ class TaxiCab(MarkovDecisionProcess[TaxiCabState, TaxiCabAction]):
 #         return s
 
     def new_passenger_at_stand(self, s: TaxiCabState, rng: random.Random = random) -> TaxiCabState:
-        if len(s.waiting_passengers) == 1 or s.taxi.passenger is not None:
-            return s
-        else:
+        if s.waiting_passengers is  None and s.taxi.passenger is None:
             new_loc = rng.choice(self.taxi_stands).location
             passenger = Passenger(
                 location=new_loc,
@@ -138,6 +190,7 @@ class TaxiCab(MarkovDecisionProcess[TaxiCabState, TaxiCabAction]):
             )   
             passengers = s.waiting_passengers + (passenger,)
             return TaxiCabState(taxi=s.taxi, waiting_passengers=passengers)
+        return s
     
     def move_taxi(self, s: TaxiCabState, a: TaxiCabAction) -> TaxiCabState:
         dx, dy = a.direction.dx, a.direction.dy
@@ -166,7 +219,7 @@ class TaxiCab(MarkovDecisionProcess[TaxiCabState, TaxiCabAction]):
         return replace(s, taxi=taxi)
     
     def pickup_passenger(self, s: TaxiCabState, a: TaxiCabAction) -> TaxiCabState:
-        if s.taxi.passenger is not None:
+        if s.taxi.passenger is not None or s.waiting_passengers is None:
             return s
         for passenger in s.waiting_passengers:
             if passenger.location == s.taxi.location:
@@ -186,7 +239,8 @@ class TaxiCab(MarkovDecisionProcess[TaxiCabState, TaxiCabAction]):
         if a.dropoff:
             s = self.dropoff_passenger(s, a)
         if a.pickup:
-            s = self.pickup_passenger(s, a) #added ifs 
+            s = self.pickup_passenger(s, a) #added ifs
+
         s = self.new_passenger_at_stand(s, rng)
         return s
 
