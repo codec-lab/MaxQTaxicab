@@ -1,8 +1,6 @@
 import random
 from dataclasses import dataclass, replace
 from typing import Tuple, Any, Tuple, Union, Literal, TypeVar, List
-from tasks import get, put, root
-# from rllib.taxicab import TaxiCab
 import numpy as np
 
 from ihrl.base import MDP, SubTask, State
