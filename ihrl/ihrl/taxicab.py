@@ -202,6 +202,11 @@ class TaxiMDP(MDP):
                 return replace(s, taxi=taxi, waiting_passengers=passengers) #was this error?
         return s
     
+    def initial_state_sample(self, rng: random.Random = random) -> TaxiCabState:
+        taxi = Taxi(rng.choice(self.legal_locations), None)
+        passenger = Passenger(rng.choice(self.taxi_stands).location, None)
+        return TaxiCabState(taxi, (passenger,))
+    
     def next_state_sample(self, s, a, rng: random.Random = random) -> TaxiCabState:
         s = self.move_taxi(s, a)
         if a.dropoff:
@@ -265,7 +270,8 @@ root_terminal = put_terminal
 class Root(SubTask,MDP):
     def __init__(self,MDP):
         self.mdp = MDP
-        self.child_subtasks = [Get(self.mdp),Put(self.mdp)] #lowercase is the original
+        c_nav = Nav(self.mdp) #keeps same value of nav in memory for both get and put
+        self.child_subtasks = [Get(self.mdp,c_nav),Put(self.mdp,c_nav)]
         self.continuation_prob = None
         self.exit_reward = None 
     def is_terminal(self,s):
@@ -286,9 +292,13 @@ class Root(SubTask,MDP):
                 distribution[i] = (distribution[i][0],distribution[i][1]/possibilities)
         return distribution
 class Get(SubTask,MDP):
-    def __init__(self,MDP):
+    def __init__(self,MDP,child_nav = None):
         self.mdp = MDP
-        self.child_subtasks = [Nav(self.mdp),pickup]
+        self.child_nav = child_nav
+        if child_nav is None:
+            self.child_subtasks = [Nav(self.mdp),pickup]
+        else:
+            self.child_subtasks = [self.child_nav,pickup]
         self.continuation_prob = None
         self.exit_reward = None 
     def is_terminal(self,s):
@@ -313,9 +323,13 @@ class Get(SubTask,MDP):
         return distribution
         
 class Put(SubTask,MDP):
-    def __init__(self,MDP):
+    def __init__(self,MDP,child_nav =None):
         self.mdp = MDP
-        self.child_subtasks = [Nav(self.mdp),putdown]
+        self.child_nav = child_nav
+        if child_nav is None:
+            self.child_subtasks = [Nav(self.mdp),putdown]
+        else:
+            self.child_subtasks = [self.child_nav,putdown]
         self.continuation_prob = None
         self.exit_reward = None
     def is_terminal(self,s):
