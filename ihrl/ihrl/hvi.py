@@ -1,6 +1,6 @@
 import functools
 from ihrl.base import SubTask, State
-from ihrl.taxicab import Root, taxi_state,taxi_put_state
+from ihrl.taxicab import Root, taxi_state,taxi_put_state, Nav, Get
 import random
 
 @functools.lru_cache(maxsize=None)
@@ -67,7 +67,7 @@ def val_true(subtask: SubTask, s: State, max_horizon=100, epsilon=0.01):
             return v2
     return v2
 
-def greedy_policy(task,init_state):
+def greedy_policy(task,init_state,deterministic=False):
     state = init_state
     traj = []
     while True:
@@ -84,7 +84,10 @@ def greedy_policy(task,init_state):
                 max_actions = [action]
             elif q_value == max_q_value:
                 max_actions.append(action)
-        max_action = random.choice(max_actions)
+        if deterministic: #for testing behavioral cloning
+            max_action = max_actions[0]
+        else:
+            max_action = random.choice(max_actions)
         ###########################################
         #Step 2, we have best action now
         #if primitive take it and add it to trajectory
@@ -94,7 +97,7 @@ def greedy_policy(task,init_state):
         #if it's not primitive, enter into the subtask
         else:
             #get sub_traj of whatever happened in the subtask and the state the subtask ended up in
-            sub_traj, next_state = greedy_policy(max_action,state)
+            sub_traj, next_state = greedy_policy(max_action,state,deterministic=deterministic)
             traj += sub_traj
         #Step 3 base case: check if the task is terminal
         if task.is_terminal(next_state):
@@ -102,8 +105,8 @@ def greedy_policy(task,init_state):
             return traj,state
         state = next_state
         
-def get_trajectories(root_mdp,num_traj):
+def get_trajectories(root_mdp,num_traj,deterministic=False):
     trajectories = []
     for i in range(num_traj):
-        trajectories.append(greedy_policy(root_mdp,root_mdp.mdp.initial_state_sample())[0]) #0 bc its traj,next_state
+        trajectories.append(greedy_policy(root_mdp,root_mdp.mdp.initial_state_sample(),deterministic)[0]) #0 bc its traj,next_state
     return trajectories
