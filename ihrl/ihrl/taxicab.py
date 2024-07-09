@@ -2,6 +2,7 @@ import random
 from dataclasses import dataclass, replace
 from typing import Tuple, Any, Tuple, Union, Literal, TypeVar, List
 import numpy as np
+import functools
 
 from ihrl.base import MDP, SubTask, State
 
@@ -76,6 +77,8 @@ def taxi_put_state(taxi_x,taxi_y,dest_x,dest_y):
 
 ##these are needed bc next_state_sample can only work as p(s') if p(s') = 1
 def pickup_transition(state,next_state):
+    if len(state.waiting_passengers) == 0:
+        return False
     if state.taxi.passenger is None and state.waiting_passengers[0].location == state.taxi.location:
         if next_state.taxi.location == state.taxi.location and next_state.taxi.passenger is not None:
             return True
@@ -95,7 +98,8 @@ class TaxiMDP(MDP):
         self.width = len(self.layout[0])
         self.walls : List[Wall] = []
         self.taxi_stands : List[TaxiStand] = []
-            
+        self.action_length = 6
+
         self.legal_locations : List[Location] = []
         for y, row in enumerate(self.layout[::-1]): #add walls and passenger locations from layouts 
             for x, char in enumerate(row):
@@ -142,7 +146,11 @@ class TaxiMDP(MDP):
                                 else: #passenger not in taxi
                                     taxi = Taxi(taxi_location,None)
                                     state = TaxiCabState(taxi,(passenger,))
-                                all_states.append(state)
+                                #removing ilegal states
+                                if state.taxi.passenger is None and len(state.waiting_passengers) == 0:
+                                    continue
+                                else:
+                                    all_states.append(state)
         #at terminal states
         for destination_stand in self.taxi_stands:
             taxi = Taxi(destination_stand.location, None)
@@ -152,7 +160,10 @@ class TaxiMDP(MDP):
         all_states = list(set(all_states))
         return all_states
 
-    def actions(self, state):
+    def start_states(self):
+        return [s for s in self.list_all_possible_states() if s.taxi.passenger is None and len(s.waiting_passengers) > 0]
+
+    def actions(self, state=None):
         return self.action_space
 
     def new_passenger_at_stand(self, s: TaxiCabState, rng: random.Random = random) -> TaxiCabState:
@@ -215,7 +226,76 @@ class TaxiMDP(MDP):
             s = self.pickup_passenger(s, a) #added ifs
         s = self.new_passenger_at_stand(s, rng)
         return s
+    
+    def state_action_reward(self,state,action):
+        reward = -1
+        next_state = self.next_state_sample(state,action)
+        if action == pickup:
+            reward = 15 if next_state.taxi.passenger is not None else -10
+        elif action == putdown:
+            reward = 15 if next_state.taxi.passenger is None else -10
+        return reward
+    
 
+    def get_transition_matrix(self):
+        transition_matrix = []
+        for state in self.list_all_possible_states():
+            action_next_state_prob = []
+            for action in self.actions(state): 
+                next_state_dist = []
+                possibilities = 0
+                for next_state in self.list_all_possible_states():
+                    if action == pickup:
+                        if pickup_transition(state,next_state):
+                            possibilities += 1
+                            probability = 1
+                        elif next_state == state and pickup_transition(state,next_state) == False:
+                            possibilities += 1
+                            probability = 1
+                        else:
+                            probability = 0
+                    elif action == putdown:
+                        if putdown_transition(state,next_state):
+                            possibilities += 1
+                            probability = 1
+                        elif next_state == state and putdown_transition(state,next_state) == False:
+                            possibilities += 1
+                            probability = 1
+                        else:
+                            probability = 0
+                    else:
+                        if next_state == self.next_state_sample(state,action):
+                            possibilities += 1
+                            probability = 1
+                        else:
+                            probability = 0
+                    next_state_dist.append(probability)
+                if possibilities > 0:
+                    #normalize probabilities
+                    for i in range(len(next_state_dist)):
+                        next_state_dist[i] = next_state_dist[i]/possibilities
+                action_next_state_prob.append(next_state_dist)
+            transition_matrix.append(action_next_state_prob)
+        return transition_matrix
+
+    def get_reward_matrix(self):
+        reward_weights_true = []
+        for state in self.list_all_possible_states():
+            state_rewards = []
+            for action in self.actions(state):
+                if action == pickup:
+                    reward = 15 if (self.next_state_sample(state,action).taxi.passenger is not None 
+                    and state.taxi.passenger is None) else -10
+                elif action == putdown:
+                    reward = 15 if (self.next_state_sample(state,action).taxi.passenger is None 
+                    and state.taxi.passenger is not None) else -10
+                else:
+                    reward = -1
+                state_rewards.append(reward)
+            reward_weights_true.append(state_rewards)
+        return reward_weights_true
+    
+    
     def next_state_reward_dist(self,state,action): #state,action,probability
     #only for prim actions
         state_reward_dist = []
@@ -256,6 +336,88 @@ class TaxiMDP(MDP):
         if state.taxi.passenger is None and len(state.waiting_passengers) == 0:
             return True
         return False
+    
+    def get_transition_reward_obj(self):
+        class TransitionReward:
+            def __init__(self,transition_matrix,reward_weights):
+                self.transition_matrix = np.array(transition_matrix)
+                self.reward_weights = np.array(reward_weights)
+        transition_matrix = self.get_transition_matrix()
+        reward_weights = self.get_reward_matrix()
+        return TransitionReward(transition_matrix,reward_weights)
+    
+    @functools.lru_cache(maxsize=None)
+    def value_iteration(
+        self,
+        init_state_index : int,
+        horizon: int,
+        transition_reward_obj,
+        deterministic = False
+    ):
+        state = self.list_all_possible_states()[init_state_index]
+        if self.is_terminal(state) or horizon == 0: 
+            return 0, None
+        max_a_val = float('-inf')
+        max_actions = []
+        for a in self.actions(): 
+            a_index = self.actions().index(a)
+            p_s_primes = transition_reward_obj.transition_matrix[init_state_index,a_index,:]
+            if len(p_s_primes) == 0:
+                raise ValueError("No transition probabilities for this state-action pair")
+            for p_sprime_index in range(len(p_s_primes)): #for each next state 0-132
+                if p_s_primes[p_sprime_index] == 0:
+                    continue
+                p_sprime = p_s_primes[p_sprime_index] #get probability of next state (usually 0) 
+                v_next, _ = self.value_iteration(p_sprime_index,horizon-1,transition_reward_obj) 
+                #want max_a [p(s') * (r(s,a) + gamma * v(s'))]
+                val = p_sprime * (transition_reward_obj.reward_weights[p_sprime_index,a_index] + 0.9 * v_next)
+                if val > max_a_val:
+                    max_a_val = val
+                    max_actions = [a]
+                elif val == max_a_val:
+                    max_actions.append(a)
+        if deterministic:
+            max_action = max_actions[0]
+        else:
+            max_action = random.choice(max_actions)
+
+        return max_a_val, max_action
+    
+    def gen_trajectory(self, init_state_index : int, max_t_length=110, transition_reward_obj=None,deterministic=False):
+        state = self.list_all_possible_states()[init_state_index]
+        state_index = init_state_index
+        trajectory = []
+        for i in range(81,max_t_length):
+            if self.is_terminal(state):
+                break
+            _, max_a = self.value_iteration(state_index, i, transition_reward_obj=transition_reward_obj,deterministic=deterministic)
+            if max_a is None:
+                raise ValueError("No action found")
+            state_prime = self.next_state_sample(state,max_a) #stochasticity
+            trajectory.append((state,max_a))
+            state = state_prime
+            state_index = self.list_all_possible_states().index(state)
+        assert len(trajectory) < 25
+        return trajectory
+    
+    def get_state_action_indices(self, total_trajectories, max_t_length=110, transition_reward_obj=None,deterministic=False):
+        #step 1 get trajectories
+        trajectories = []
+        for i in range(total_trajectories):
+            init_state_index = self.list_all_possible_states().index(self.initial_state_sample())
+            trajectory = self.gen_trajectory(init_state_index,max_t_length,transition_reward_obj,deterministic)
+            trajectories.append(trajectory)
+        #step 2 get state action indices
+        state_indices = []
+        action_indices = []
+        for trajectory in trajectories:
+            assert len(trajectory) < 50 #will have to change if map is larger but for now this is fine
+            for state,action in trajectory:
+                state_index = self.list_all_possible_states().index(state)
+                action_index = self.actions().index(action)
+                state_indices.append(state_index)
+                action_indices.append(action_index)
+        return state_indices, action_indices
 
 def get_terminal(s):
     if s.taxi.passenger is not None:
